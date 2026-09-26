@@ -5,63 +5,70 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  loadAppData,
+  saveAppData,
+} from '../src/services/storageService';
+import {
+  updateWalletById,
+  createWallet,
+  createAssetsFromSetup,
+  deleteWalletById,
+} from '../src/services/walletService';
+import {
+  deleteTransaction,
+  editTransaction,
+  createStandardTransaction,
+  createAccountTransfer,
+  createInvestmentPurchase,
+  createExchangeSale,
+} from '../src/services/transactionService';
+
+
+import type { Wallet } from '../src/types/wallet';
+import type { Transaction } from '../src/types/transaction';
+import type { NewTransactionForm } from '../src/types/transactionForm';
+import type {
+  WalletSetupForm,
+  ProfileEditForm,
+} from '../src/types/walletForm';
+import type { CrossWalletTransferForm } from '../src/types/transferForm';
+import type {
+  AppTheme,
+  CustomColors,
+  SortOption,
+  FilterAssetType,
+} from '../src/types/ui';
+
+import { formatDate, formatTime } from '../src/utils/date';
+
+import {
+  parseAmount,
+  formatAmount,
+  parseAssetAmount,
+  formatAssetAmount,
+} from '../src/utils/currency';
+
+import { COLORS } from '../src/constants/colors';
+import { PROFILE_ICONS } from '../src/constants/profileIcons';
+
+import {
+  EXPENSE_CATEGORIES,
+  CART_CATEGORIES,
+} from '../src/constants/categories';
 
 const { height, width } = Dimensions.get('window');
 const STATUSBAR_HEIGHT = Platform.OS === 'android' ? StatusBar.currentHeight : 0;
-
-// --- TEMA VE RENKLER ---
-const COLORS = {
-  dark: { bg: '#0A0A0A', card: '#1A1A1A', text: '#FFF', subText: '#999', border: '#333', primary: '#10B981' },
-  light: { bg: '#F8F9FA', card: '#FFFFFF', text: '#111', subText: '#666', border: '#E2E8F0', primary: '#10B981' },
-  customBgs: [{id: 'bg1', color: '#0F172A'}, {id: 'bg2', color: '#1E1B4B'}, {id: 'bg3', color: '#064E3B'}, {id: 'bg4', color: '#2C1E16'}],
-  customBtns: [{id: 'btn1', color: '#14B8A6'}, {id: 'btn2', color: '#F97316'}, {id: 'btn3', color: '#F43F5E'}, {id: 'btn4', color: '#8B5CF6'}]
-};
-const PROFILE_ICONS = ['person', 'business', 'briefcase', 'home', 'wallet', 'star'];
-
-// --- GELİŞMİŞ YARDIMCI FONKSİYONLAR ---
-const formatDate = (dateObj) => {
-  if (!dateObj) return '';
-  const d = new Date(dateObj);
-  return `${d.getDate().toString().padStart(2, '0')}.${(d.getMonth() + 1).toString().padStart(2, '0')}.${d.getFullYear()}`;
-};
-const formatTime = (dateObj) => {
-  if (!dateObj) return '';
-  const d = new Date(dateObj);
-  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
-};
-
-// SADECE TL (Nakit/Banka) İçin: Binlik ayraçlı ve 2 haneli kuruş formatı
-const parseAmount = (val) => {
-  if (typeof val === 'number') return val;
-  if (!val) return 0;
-  const parsed = parseFloat(val.toString().replace(/\./g, '').replace(',', '.'));
-  return isNaN(parsed) ? 0 : parsed;
-};
-const formatAmount = (num) => {
-  return Number(num || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-};
-
-// SADECE ALTIN/DOLAR İçin: Düz ondalık (Zorunlu ,00 eklemez, binlik ayraç bozmaz)
-const parseAssetAmount = (val) => {
-  if (typeof val === 'number') return val;
-  if (!val) return 0;
-  const parsed = parseFloat(val.toString().replace(',', '.'));
-  return isNaN(parsed) ? 0 : parsed;
-};
-const formatAssetAmount = (num) => {
-  return Number(num || 0).toLocaleString('tr-TR');
-};
 
 export default function App() {
   const systemColorScheme = useColorScheme();
 
   // --- DURUM YÖNETİMİ (STATE) ---
   const [isDataLoaded, setIsDataLoaded] = useState(false);
-  const [wallets, setWallets] = useState([]);
-  const [activeWalletId, setActiveWalletId] = useState(null);
-  const [appTheme, setAppTheme] = useState('system'); 
-  const [customColors, setCustomColors] = useState({ bg: '#0F172A', btn: '#14B8A6' });
+  const [wallets, setWallets] = useState<Wallet[]>([]);
+  const [activeWalletId, setActiveWalletId] = useState<string | null>(null);
+  const [appTheme, setAppTheme] = useState<AppTheme>('system'); 
+  const [customColors, setCustomColors] = useState<CustomColors>({ bg: '#0F172A', btn: '#14B8A6' });
 
   // Arayüz Modalları
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -82,10 +89,10 @@ export default function App() {
   // Arama, Filtre ve Sıralama 
   const [searchQuery, setSearchQuery] = useState('');
   const [isFilterModalVisible, setIsFilterModalVisible] = useState(false);
-  const [sortOption, setSortOption] = useState('default'); 
-  const [filterCats, setFilterCats] = useState([]);
-  const [filterAssets, setFilterAssets] = useState([]);
-  const [filterDate, setFilterDate] = useState(null);
+  const [sortOption, setSortOption] = useState<SortOption>('default'); 
+  const [filterCats, setFilterCats] = useState<string[]>([]);
+  const [filterAssets, setFilterAssets] = useState<FilterAssetType[]>([]);
+  const [filterDate, setFilterDate] = useState<Date | null>(null);
   
   const [tempSortOption, setTempSortOption] = useState('default');
   const [tempFilterCats, setTempFilterCats] = useState([]);
@@ -103,14 +110,16 @@ export default function App() {
 
   // Form Verileri (Adım Adım Sihirbaz)
   const [txStep, setTxStep] = useState(1);
-  const [setupData, setSetupData] = useState({ name: '', cash: '', goldGrams: '', dollar: '', banks: [], profilePic: 'person' });
-  const [profileEditData, setProfileEditData] = useState({ name: '', profilePic: 'person' });
-  const [newTx, setNewTx] = useState(getInitialTxState());
-  const [selectedTx, setSelectedTx] = useState(null);
-  const [editTxData, setEditTxData] = useState(null);
+  const [setupData, setSetupData] = useState<WalletSetupForm>({ name: '', cash: '', goldGrams: '', dollar: '', banks: [], profilePic: 'person' });
+  const [profileEditData, setProfileEditData] = useState<ProfileEditForm>({ name: '', profilePic: 'person' });
+  const [newTx, setNewTx] = useState<NewTransactionForm>(
+    getInitialTxState()
+  );
+  const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
+  const [editTxData, setEditTxData] = useState<Transaction | null>(null);
   const [isDetailsVisible, setIsDetailsVisible] = useState(false);
   
-  const [crossWalletData, setCrossWalletData] = useState({ targetWalletId: null, fromAsset: 'cash', fromBankId: null, amount: '', description: '' });
+  const [crossWalletData, setCrossWalletData] = useState<CrossWalletTransferForm>({ targetWalletId: null, fromAsset: 'cash', fromBankId: null, amount: '', description: '' });
 
   const activeWallet = wallets.find(w => w.id === activeWalletId) || null;
   const assets = activeWallet ? activeWallet.assets : { cash: 0, goldGrams: 0, dollar: 0, banks: [] };
@@ -122,9 +131,6 @@ export default function App() {
     return 0;
   });
   const targetWallets = sortedWallets.filter(w => w.id !== activeWalletId);
-
-  const EXPENSE_CATEGORIES = ['Market', 'Fatura', 'Yatırım', 'Giyim', 'Abonelik', 'Restoran', 'Online Alışveriş', 'Diğer'];
-  const CART_CATEGORIES = ['Market', 'Giyim', 'Online Alışveriş', 'Restoran']; 
 
   // --- ANDROID GERİ TUŞU YÖNETİMİ ---
   useEffect(() => {
@@ -170,29 +176,46 @@ export default function App() {
 
   const loadData = async () => {
     try {
-      const savedWallets = await AsyncStorage.getItem('wallets');
-      const savedActiveId = await AsyncStorage.getItem('activeWalletId');
-      const savedTheme = await AsyncStorage.getItem('appTheme');
-      const savedCustom = await AsyncStorage.getItem('customColors');
-      if (savedWallets) setWallets(JSON.parse(savedWallets));
-      if (savedActiveId) setActiveWalletId(savedActiveId);
-      if (savedTheme) setAppTheme(savedTheme);
-      if (savedCustom) setCustomColors(JSON.parse(savedCustom));
+      const data = await loadAppData();
+
+      setWallets(data.wallets);
+
+      if (data.activeWalletId) {
+        setActiveWalletId(data.activeWalletId);
+      }
+
+      if (data.appTheme) {
+        setAppTheme(data.appTheme);
+      }
+
+      if (data.customColors) {
+        setCustomColors(data.customColors);
+      }
+
       setIsDataLoaded(true);
-      if (!savedWallets || JSON.parse(savedWallets).length === 0) setIsSetupVisible(true);
-    } catch (e) { console.error("Veri yüklenemedi", e); }
+
+      if (data.wallets.length === 0) {
+        setIsSetupVisible(true);
+      }
+    } catch (e) {
+      console.error('Veri yüklenemedi', e);
+    }
   };
 
   const saveData = async () => {
     try {
-      await AsyncStorage.setItem('wallets', JSON.stringify(wallets));
-      await AsyncStorage.setItem('activeWalletId', activeWalletId || '');
-      await AsyncStorage.setItem('appTheme', appTheme);
-      await AsyncStorage.setItem('customColors', JSON.stringify(customColors));
-    } catch (e) { console.error("Veri kaydedilemedi", e); }
+      await saveAppData(
+        wallets,
+        activeWalletId,
+        appTheme,
+        customColors
+      );
+    } catch (e) {
+      console.error('Veri kaydedilemedi', e);
+    }
   };
 
-  function getInitialTxState() {
+  function getInitialTxState(): NewTransactionForm {
     const now = new Date();
     return {
       type: 'gider', assetType: 'cash', selectedBankId: null, category: '', 
@@ -230,38 +253,72 @@ export default function App() {
   const t = appTheme === 'custom' ? { bg: customColors.bg, card: '#1A1A1A', text: '#FFF', subText: '#999', border: '#333', primary: customColors.btn } 
         : appTheme === 'system' ? COLORS[systemColorScheme || 'dark'] : COLORS[appTheme];
 
-  const updateActiveWallet = (updates) => { setWallets(wallets.map(w => w.id === activeWalletId ? { ...w, ...updates } : w)); };
+  const updateActiveWallet = (
+    updates: Partial<Wallet>
+  ) => { 
+    if (!activeWalletId) return;
+    setWallets(
+      updateWalletById(
+        wallets,
+        activeWalletId,
+        updates
+      )
+    );
+  };
 
   // --- CÜZDAN KAYDET/SİL ---
   const handleSaveSetup = () => {
-    if (!setupData.name.trim() && !isEditingAssets) { Alert.alert("Hata", "Lütfen cüzdan adı girin."); return; }
-    const validBanks = setupData.banks.filter(b => b.name.trim() !== '');
-    const newAssets = { 
-      cash: parseAmount(setupData.cash), 
-      goldGrams: parseAssetAmount(setupData.goldGrams), 
-      dollar: parseAssetAmount(setupData.dollar), 
-      banks: validBanks.map(b => ({ id: b.id || Math.random().toString(), name: b.name, amount: parseAmount(b.amount) })) 
-    };
+    if (!setupData.name.trim() && !isEditingAssets) {
+      Alert.alert(
+        'Hata',
+        'Lütfen cüzdan adı girin.'
+      );
+      return;
+    }
 
     if (isEditingAssets) {
-      updateActiveWallet({ assets: newAssets });
+      const newAssets =
+        createAssetsFromSetup(setupData);
+
+      updateActiveWallet({
+        assets: newAssets,
+      });
+
       setIsEditingAssets(false);
     } else {
-      const newWallet = { id: Math.random().toString(), name: setupData.name, profilePic: 'person', assets: newAssets, transactions: [] };
-      setWallets([...wallets, newWallet]);
+      const newWallet =
+        createWallet(setupData);
+
+      setWallets([
+        ...wallets,
+        newWallet,
+      ]);
+
       setActiveWalletId(newWallet.id);
       setIsSetupVisible(false);
     }
   };
 
   const handleDeleteWallet = () => {
-    const updatedWallets = wallets.filter(w => w.id !== activeWalletId);
-    setWallets(updatedWallets);
+    if (!activeWalletId) return;
+
+    const result = deleteWalletById(
+      wallets,
+      activeWalletId
+    );
+
+    setWallets(result.wallets);
+    setActiveWalletId(
+      result.nextActiveWalletId
+    );
+
     setShowDeleteConfirm(false);
     setDeleteConfirmText('');
     setIsEditingAssets(false);
-    if (updatedWallets.length > 0) setActiveWalletId(updatedWallets[0].id);
-    else { setActiveWalletId(null); setIsSetupVisible(true); }
+
+    if (result.wallets.length === 0) {
+      setIsSetupVisible(true);
+    }
   };
 
   const handleSaveProfile = () => {
@@ -308,25 +365,20 @@ export default function App() {
     );
   };
 
-  const executeDeleteTx = (tx) => {
-    let updatedAssets = JSON.parse(JSON.stringify(assets));
-    let txsToRemove = tx.groupId ? transactions.filter(t => t.groupId === tx.groupId) : [tx];
+  const executeDeleteTx = (
+    tx: Transaction
+  ) => {
+    const result = deleteTransaction(
+      tx,
+      assets,
+      transactions
+    );
 
-    txsToRemove.forEach(t => {
-      const amt = parseFloat(t.amount) || 0;
-      const modifier = t.type === 'gider' ? amt : -amt; 
-      
-      if (t.assetType === 'cash') updatedAssets.cash += modifier;
-      else if (t.assetType === 'gold') updatedAssets.goldGrams += modifier;
-      else if (t.assetType === 'dollar') updatedAssets.dollar += modifier;
-      else if (t.assetType === 'bank' && t.selectedBankId) {
-        const b = updatedAssets.banks.find(bk => bk.id === t.selectedBankId);
-        if (b) b.amount += modifier;
-      }
+    updateActiveWallet({
+      assets: result.assets,
+      transactions: result.transactions,
     });
 
-    const newTransactions = transactions.filter(t => !txsToRemove.find(rm => rm.id === t.id));
-    updateActiveWallet({ assets: updatedAssets, transactions: newTransactions });
     setIsDetailsVisible(false);
     setSelectedTx(null);
   };
@@ -347,43 +399,35 @@ export default function App() {
   };
 
   const handleSaveEditTx = () => {
-    if (!editTxData.txName.trim()) { Alert.alert("Hata", "İşlem adı boş olamaz."); return; }
-    
-    let updatedAssets = JSON.parse(JSON.stringify(assets));
-    const oldTx = transactions.find(t => t.id === editTxData.id);
-    const amt = parseFloat(oldTx.amount);
+    if (!editTxData) return;
 
-    if (oldTx.assetType !== editTxData.assetType || oldTx.selectedBankId !== editTxData.selectedBankId) {
-      const reverseMod = oldTx.type === 'gider' ? amt : -amt;
-      if (oldTx.assetType === 'cash') updatedAssets.cash += reverseMod;
-      else if (oldTx.assetType === 'bank') {
-        const b = updatedAssets.banks.find(bk => bk.id === oldTx.selectedBankId);
-        if (b) b.amount += reverseMod;
-      }
-
-      const applyMod = oldTx.type === 'gider' ? -amt : amt;
-      if (editTxData.assetType === 'cash') updatedAssets.cash += applyMod;
-      else if (editTxData.assetType === 'bank') {
-        const b = updatedAssets.banks.find(bk => bk.id === editTxData.selectedBankId);
-        if (b) b.amount += applyMod;
-      }
+    if (!editTxData.txName.trim()) {
+      Alert.alert(
+        'Hata',
+        'İşlem adı boş olamaz.'
+      );
+      return;
     }
 
-    const updatedTransactions = transactions.map(t => {
-      if (t.id === editTxData.id) {
-        return { 
-          ...t, 
-          txName: editTxData.txName, 
-          category: editTxData.category, 
-          description: editTxData.description,
-          assetType: editTxData.assetType,
-          selectedBankId: editTxData.selectedBankId
-        };
-      }
-      return t;
+    const result = editTransaction(
+      editTxData,
+      assets,
+      transactions
+    );
+
+    if (!result) {
+      Alert.alert(
+        'Hata',
+        'Düzenlenecek işlem bulunamadı.'
+      );
+      return;
+    }
+
+    updateActiveWallet({
+      assets: result.assets,
+      transactions: result.transactions,
     });
 
-    updateActiveWallet({ assets: updatedAssets, transactions: updatedTransactions });
     setIsEditTxModalVisible(false);
     setSelectedTx(null);
   };
@@ -471,43 +515,131 @@ export default function App() {
     const groupId = Math.random().toString();
 
     if (isTransfer) {
-      if (newTx.transferFrom === newTx.transferTo || !newTx.transferTo) return Alert.alert("Hata", "Geçerli bir hesap seçin.");
-      if (newTx.transferFrom === 'cash') updatedAssets.cash -= finalAmount; else updatedAssets.banks.find(b=>b.id===newTx.transferFrom).amount -= finalAmount;
-      if (newTx.transferTo === 'cash') updatedAssets.cash += finalAmount; else updatedAssets.banks.find(b=>b.id===newTx.transferTo).amount += finalAmount;
-      newTransactions.push({ id: Math.random().toString(), groupId, type: 'gider', assetType: newTx.transferFrom==='cash'?'cash':'bank', selectedBankId: newTx.transferFrom!=='cash'?newTx.transferFrom:null, category: 'Aktarım', txName: newTx.txName||'Aktarım Çıkışı', description: newTx.description, amount: finalAmount, date: dStr, time: tStr, remainingBalance: newTx.transferFrom==='cash'?updatedAssets.cash:updatedAssets.banks.find(b=>b.id===newTx.transferFrom).amount });
-      newTransactions.push({ id: Math.random().toString(), groupId, type: 'gelir', assetType: newTx.transferTo==='cash'?'cash':'bank', selectedBankId: newTx.transferTo!=='cash'?newTx.transferTo:null, category: 'Aktarım', txName: newTx.txName||'Aktarım Girişi', description: newTx.description, amount: finalAmount, date: dStr, time: tStr, remainingBalance: newTx.transferTo==='cash'?updatedAssets.cash:updatedAssets.banks.find(b=>b.id===newTx.transferTo).amount });
-    } 
-    else if (isInvestmentBuy) {
-      const receivedAmount = parseAssetAmount(newTx.investAmount); 
-      if (newTx.assetType === 'cash') updatedAssets.cash -= finalAmount; else updatedAssets.banks.find(b=>b.id===newTx.selectedBankId).amount -= finalAmount;
-      if (newTx.investTarget === 'gold') updatedAssets.goldGrams += receivedAmount; else updatedAssets.dollar += receivedAmount;
-      newTransactions.push({ id: Math.random().toString(), groupId, type: 'gider', assetType: newTx.assetType, selectedBankId: newTx.selectedBankId, category: 'Yatırım', txName: newTx.txName||'Yatırım Alış', placeName: newTx.investPlace, amount: finalAmount, date: dStr, time: tStr, remainingBalance: newTx.assetType==='cash'?updatedAssets.cash:updatedAssets.banks.find(b=>b.id===newTx.selectedBankId).amount });
-      newTransactions.push({ id: Math.random().toString(), groupId, type: 'gelir', assetType: newTx.investTarget, category: 'Yatırım', txName: 'Alınan Varlık', placeName: newTx.investPlace, amount: receivedAmount, date: dStr, time: tStr, remainingBalance: newTx.investTarget==='gold'?updatedAssets.goldGrams:updatedAssets.dollar });
+      const result = createAccountTransfer(
+        newTx,
+        assets,
+        finalAmount
+      );
+
+      if (!result) {
+        Alert.alert(
+          'Hata',
+          'Aktarım oluşturulamadı.'
+        );
+        return;
+      }
+
+      updatedAssets.cash =
+        result.assets.cash;
+
+      updatedAssets.goldGrams =
+        result.assets.goldGrams;
+
+      updatedAssets.dollar =
+        result.assets.dollar;
+
+      updatedAssets.banks =
+        result.assets.banks;
+
+      newTransactions.push(
+        ...result.transactions
+      );
     }
+ 
+    else if (isInvestmentBuy) {
+      const result = createInvestmentPurchase(
+        newTx,
+        assets,
+        finalAmount
+      );
+
+      if (!result) {
+        Alert.alert(
+          'Hata',
+          'Yatırım işlemi oluşturulamadı.'
+        );
+        return;
+      }
+
+      updatedAssets.cash =
+        result.assets.cash;
+
+      updatedAssets.goldGrams =
+        result.assets.goldGrams;
+
+      updatedAssets.dollar =
+        result.assets.dollar;
+
+      updatedAssets.banks =
+        result.assets.banks;
+
+      newTransactions.push(
+        ...result.transactions
+      );
+    }
+
     else if (isExchangeSale) {
-      const tlGained = parseAmount(newTx.exchangedTL); 
-      if (newTx.assetType === 'gold') updatedAssets.goldGrams -= finalAmount; else updatedAssets.dollar -= finalAmount;
-      if (newTx.exchangeTarget === 'cash') updatedAssets.cash += tlGained; else updatedAssets.banks.find(b=>b.id===newTx.exchangeTarget).amount += tlGained;
-      newTransactions.push({ id: Math.random().toString(), groupId, type: 'gider', assetType: newTx.assetType, isExchange: true, category: 'Bozdurma', txName: newTx.txName||'Yatırım Bozdurma', placeName: newTx.exchangePlace, amount: finalAmount, exchangedTL: tlGained, date: dStr, time: tStr, remainingBalance: newTx.assetType==='gold'?updatedAssets.goldGrams:updatedAssets.dollar });
+      const result = createExchangeSale(
+        newTx,
+        assets,
+        finalAmount
+      );
+
+      if (!result) {
+        Alert.alert(
+          'Hata',
+          'Bozdurma işlemi oluşturulamadı.'
+        );
+        return;
+      }
+
+      updatedAssets.cash =
+        result.assets.cash;
+
+      updatedAssets.goldGrams =
+        result.assets.goldGrams;
+
+      updatedAssets.dollar =
+        result.assets.dollar;
+
+      updatedAssets.banks =
+        result.assets.banks;
+
+      newTransactions.push(
+        ...result.transactions
+      );
     }
     else {
-      const amountModifier = newTx.type === 'gider' ? -finalAmount : finalAmount;
-      let remBalance = 0;
-      if (newTx.assetType === 'cash') { updatedAssets.cash += amountModifier; remBalance = updatedAssets.cash; }
-      else if (newTx.assetType === 'gold') { updatedAssets.goldGrams += amountModifier; remBalance = updatedAssets.goldGrams; }
-      else if (newTx.assetType === 'dollar') { updatedAssets.dollar += amountModifier; remBalance = updatedAssets.dollar; }
-      else if (newTx.assetType === 'bank') { const b = updatedAssets.banks.find(bk=>bk.id===newTx.selectedBankId); b.amount += amountModifier; remBalance = b.amount; }
-      
-      newTransactions.push({ 
-        id: Math.random().toString(), 
-        type: newTx.type, assetType: newTx.assetType, selectedBankId: newTx.selectedBankId,
-        category: newTx.type === 'gelir' ? 'Giriş' : newTx.category, 
-        txName: newTx.txName, description: newTx.description, placeName: newTx.placeName,
-        products: newTx.products,
-        amount: finalAmount, isCart: isCartCategory && newTx.type === 'gider', 
-        date: dStr, time: tStr, remainingBalance: remBalance 
-      });
+    const result = createStandardTransaction(
+      newTx,
+      assets,
+      finalAmount
+    );
+
+    if (!result) {
+      Alert.alert(
+        'Hata',
+        'İşlem oluşturulamadı.'
+      );
+      return;
     }
+
+    updatedAssets.cash =
+      result.assets.cash;
+
+    updatedAssets.goldGrams =
+      result.assets.goldGrams;
+
+    updatedAssets.dollar =
+      result.assets.dollar;
+
+    updatedAssets.banks =
+      result.assets.banks;
+
+    newTransactions.push(
+      ...result.transactions
+    );
+  }
 
     updateActiveWallet({ assets: updatedAssets, transactions: [...newTransactions, ...transactions] });
     setSearchQuery('');
@@ -784,7 +916,7 @@ export default function App() {
             <View style={{height: 1, backgroundColor: t.border, marginBottom: 20}} />
             <Text style={{color: t.text, fontSize: 18, fontWeight: 'bold', marginBottom: 15}}>Tema</Text>
             <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 10}}>
-              {['system', 'light', 'dark', 'custom'].map(themeOpt => (
+              {(['system', 'light', 'dark', 'custom'] as AppTheme[]).map(themeOpt => (
                 <TouchableOpacity key={themeOpt} style={{padding: 10, backgroundColor: appTheme === themeOpt ? t.primary : t.bg, borderRadius: 10}} onPress={() => setAppTheme(themeOpt)}>
                   <Text style={{color: appTheme === themeOpt ? '#FFF' : t.text, fontSize: 12}}>{themeOpt.toUpperCase()}</Text>
                 </TouchableOpacity>
